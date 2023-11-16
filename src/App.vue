@@ -1,5 +1,6 @@
 <template>
-  <Vue3Select field-id="test-custom-select" :options="options" />
+  <Vue3Select field-id="test-custom-select" :options="options2" unsafe-labels force-above />
+  <p><a href="https://github.com/evanwills/">Github</a></p>
 </template>
 
 <script setup>
@@ -14,6 +15,16 @@ const options = ref([
   { value: 'tarrin', label: 'Tarrin' },
   { value: 'toria', label: 'Toria' },
   { value: 'long', label: 'Rediculously long and silly option that should never be allowed.' },
+  { value: 'really long', label: 'This one is even longer. Someone should have done some editing before they let this one through. I don\'t know why you would do this but...' },
+]);
+const options2 = ref([
+  { value: '', label: '-- please choose --', default: true },
+  { value: 'evan', label: 'Evan is <em>cool</em>' },
+  { value: 'ivan', label: '<strong>Ivan</strong> is a pedent' },
+  { value: 'tarrin', label: 'Tarrin' },
+  { value: 'toria', label: 'Toria' },
+  { value: 'long', label: 'Rediculously long and silly option that <a href="https://google.com/">should never be allowed</a>.' },
+  { value: 'really long', label: 'This one is even longer. Someone should have done some editing before they let this one through. I don\'t know why you would do this but...' },
 ]);
 
 </script>
