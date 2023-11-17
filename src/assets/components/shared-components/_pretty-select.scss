@@ -172,9 +172,10 @@
     overflow-y: auto;
     padding: 0 !important;
     position: absolute;
-    right: 0.025rem;
+    // right: 0.025rem;
     top: var(--btn-height);
-    width: calc(100% - 0.15rem);
+    // width: calc(100% - 0.15rem);
+    width: 100%;
 
     &--above {
       top: auto;

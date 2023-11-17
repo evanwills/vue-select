@@ -32,14 +32,14 @@
       ref="vueSelectList"
       role="listbox">
       <li
-        v-for="(option, index) in options"
+        v-for="(option, index) in usableOptions"
         class="vue-select__option"
         :key="option.value"
         role="option"
         :aria-selected="option.value === current.value">
         <input
           class="vue-select__radio"
-          :disabled="option.disabled"
+          :disabled="disabledOption(option, isDisabled)"
           :id="radioID(index)"
           :key="expanded"
           :name="radioName"
@@ -82,11 +82,30 @@ import {
   onBeforeMount,
   ref,
 } from 'vue';
+import { disabledOption, normaliseOptions, removeEmptyFilter } from './radio-select.utils';
 
 // --------------------------------------------------
 // START: Emitted events
 
 const emit = defineEmits(['blur', 'change', 'closed', 'invalid']);
+
+const ePre = (method, before = null) => {
+    const t = typeof before;
+    let suffix = '';
+
+    if (t === 'boolean') {
+      suffix = (before === true)
+        ? ' (before)'
+        : ' (after)';
+    } else if (t === 'string') {
+      const _before = before.trim();
+      if (_before !== '') {
+        suffix = ` ("${_before}")`;
+      }
+    }
+
+    return `pretty-select.${method}()${suffix} `;
+  };
 
 //  END:  Emitted events
 // --------------------------------------------------
@@ -105,8 +124,33 @@ const emit = defineEmits(['blur', 'change', 'closed', 'invalid']);
  */
 
 const props = defineProps({
+  /**
+   * Whether or not to remove duplicate options from options list.
+   *
+   * @property {boolean} dedupe
+   */
+  dedupe: { type: Boolean, required: false, default: false },
 
+  /**
+   * For select fields where no default is currently set, this
+   * provides an indicator that the user must choose an option
+   *
+   * (Is inserted as the first item in a select list)
+   *
+   * @property {string} emptyTxt
+   */
+  emptyTxt: { type: String, required: false, default: '' },
+
+  /**
+   * ID of the field being rendered
+   *
+   * Used to link the field to its label, error message and help
+   * text
+   *
+   * @property {string} errorMsg
+   */
   fieldId: { type: String, required: true },
+
   /**
    * Sometimes you need the dropdown to always drop up (sit above the
    * main button)
@@ -114,6 +158,26 @@ const props = defineProps({
    * @property {boolean} forceAbove
    */
   forceAbove: { type: Boolean, required: false, default: false },
+
+  /**
+   * Sometimes it's useful to get the full option object on a change
+   * or blur event. If the client code needs the full option, then
+   * set `full-option` attribute in the client
+   *
+   * @property {boolean} fullOption
+   */
+  fullOption: { type: Boolean, required: false, default: false },
+
+  /**
+   * IDs for error and help text blocks to use as value for
+   * `aria-describedby` attribute
+   *
+   * Used to link the field to its label, error message and help
+   * text
+   *
+   * @property {string} errorMsg
+   */
+  helpIds: { type: String, required: false, default: '' },
 
   /**
    * Whether or not this field is disabled.
@@ -149,6 +213,15 @@ const props = defineProps({
    * @property {boolean} loop
    */
   loop: { type: Boolean, required: false, default: false },
+
+  /**
+   * Whether or not to show the empty value if the default value
+   * is non-empty
+   *
+   * @property {boolean} noNonEmpty
+   */
+  noNonEmpty: { type: Boolean, required: false, default: false },
+
   /**
    * List of options to be rendered for the select
    *
@@ -239,6 +312,33 @@ const freeze = ref(false);
 const unusable = ref(false);
 
 /**
+ * List of options to be rendered
+ *
+ * Each option object has the following properties
+ *
+ * @property {Array<OptionProps>}
+ */
+const usableOptions = ref([]);
+
+/**
+ * Whether or not to render the empty option for <SELECT>
+ * fields
+ *
+ * Only ever true if `no-non-empty` is set and the `value`
+ * attribute on this component is an empty string
+ *
+ * @property {boolean} useEmpty
+ */
+const useEmpty = ref(false);
+
+/**
+ * Whether or not the empty option(s) have already been removed
+ *
+ * @property {boolean} emptyRemoved
+ */
+const emptyRemoved = ref(false);
+
+/**
  * The wrapping UL tag for the options list
  *
  * Used for setting focus on the approptiate option when the dropdown
@@ -262,16 +362,18 @@ const vueSelectOpen = ref(null);
 // --------------------------------------------------
 // START: Computed properties
 
+/**
+ * Class list for the main button element
+ *
+ * @returns {string}
+ */
 const btnClass = computed(() => {
   const tmp = 'vue-select__';
-
-  let output = `${tmp}btn ${tmp}btn--`;
-
-  output += (above.value === true)
+  const placement = (above.value === true)
     ? 'above'
     : 'below';
 
-  return `${output} ${tmp} ${tmp}opt-wrap`;
+  return `${tmp}btn ${tmp}btn--${placement} ${tmp}opt-wrap`;
 });
 
 /**
@@ -319,7 +421,7 @@ const listClass = computed(() => {
  *
  * @var {number}
  */
-const maxIndex = computed(() => (props.options.length - 1));
+const maxIndex = computed(() => (usableOptions.value.length - 1));
 
 /**
  * Name attribute for all the radio input fields.
@@ -409,7 +511,12 @@ const btnClick = () => {
 
 const emitChange = (type = 'change') => {
   if (unusable.value === false) {
-    emit(type, current.value);
+    emit(
+      type,
+      (props.fullOption === true)
+        ? current.value
+        : current.value.value,
+    );
     emit('invalid', isInvalid());
   }
 };
@@ -430,28 +537,39 @@ const closeClick = () => {
 };
 
 /**
+ * Remove empty option(s) from list of usable options
+ */
+const removeEmpty = () => {
+  if (emptyRemoved.value === false
+    && props.noNonEmpty === true
+    && current.value !== null
+    && current.value.value.trim() !== ''
+  ) {
+    usableOptions.value = usableOptions.value.filter(removeEmptyFilter);
+    emptyRemoved.value = true;
+  }
+};
+
+/**
  * Update the current value and index of the selected option
  *
  * @param {string} value
  *
- * @returns {boolean} TRUE if a valid option was selected.
- *                    FALSE otherwise
+ * @returns {void}
  */
 const setCurrentValue = (value) => {
-  if (unusable.value === false) {
-    for (let a = 0; a < props.options.length; a += 1) {
-      if (props.options[a].value === value) {
-        current.value = props.options[a];
-        currentIndex.value = a;
-        return true;
-      }
+  for (let a = 0; a < usableOptions.value.length; a += 1) {
+    if (usableOptions.value[a].value === value) {
+      current.value = usableOptions.value[a];
+      currentIndex.value = a;
+      removeEmpty();
+
+      return;
     }
   }
 
   currentIndex.value = 0;
   current.value = null;
-
-  return false;
 };
 
 /**
@@ -462,9 +580,9 @@ const setCurrentValue = (value) => {
  */
 const setSelected = () => {
   if (unusable.value === false) {
-    current.value = props.options[currentIndex.value];
+    current.value = usableOptions.value[currentIndex.value];
     vueSelectList.value.children[currentIndex.value].checked = true;
-
+    removeEmpty();
     emitChange();
   }
 };
@@ -545,19 +663,49 @@ const optionSelected = (event) => {
   }
 };
 
+/**
+ * Make option list usable for <SELECT> and/or <INPUT type="radio" />
+ *
+ * Normalise key/value pairs
+ */
+const setUsableOptions = () => {
+  // Make sure options are useable
+  let options = normaliseOptions(
+    usableOptions.value,
+    (current.value !== null)
+      ? current.value.value
+      : props.value,
+    props.dedupe,
+  );
+
+  options = (useEmpty.value === true)
+    ? [{ value: '', label: props.emptyTxt }, ...options]
+    : options;
+
+  // Give each radio option a unique ID
+  usableOptions.value = options;
+};
+
 //  END:  Local methods
 // --------------------------------------------------
 // START: Lifecycle methods
 
 onBeforeMount(() => {
+  useEmpty.value = (props.noNonEmpty === false || props.value === '');
+  usableOptions.value = props.options;
+
+  setUsableOptions();
+  removeEmpty();
+
   setCurrentValue(props.value);
 
   if (current.value === null) {
-    current.value = props.options[0]; // eslint-disable-line prefer-destructuring
+    current.value = usableOptions.value[0]; // eslint-disable-line prefer-destructuring
   }
 
   unusable.value = (props.isDisabled === true || props.isReadonly === true);
   above.value = (props.forceAbove === true);
+
 });
 
 //  END:  Lifecycle methods
